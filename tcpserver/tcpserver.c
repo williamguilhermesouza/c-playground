@@ -8,10 +8,18 @@
 #include <sys/socket.h>
 #include <sys/types.h>
 #include <unistd.h>
+//#include "tcpserver.h"
 
 #define BACKLOG 10
 #define BUFFER_INITIAL_SIZE 1024
 
+enum ServerState
+{
+	CREATED = 0,
+	INITIALIZED = 1,
+	LISTENING = 2,
+	CLOSED = 3
+};
 typedef int server_state;
 struct tcpserver
 {
@@ -109,7 +117,7 @@ int handle_connections(struct tcpserver *sv)
 	return 0;
 }
 
-void recv_loop(int fd, int (*on_message_recv)(char *, size_t, int))
+void recv_loop(int fd, ssize_t (*on_message_recv)(char *, size_t, int))
 {
 	int buffer_size = BUFFER_INITIAL_SIZE;
 	char *buffer = calloc(buffer_size, sizeof(char));
@@ -150,7 +158,7 @@ void recv_loop(int fd, int (*on_message_recv)(char *, size_t, int))
 		total_bytes += bytes_rcv;
 
 		int bytes_processed = on_message_recv(buffer, total_bytes, fd);
-		if (bytes_processed == -1)
+		if (bytes_processed == -1 || bytes_processed > total_bytes)
 		{
 			fprintf(stderr, "Failed processing received message");
 			break;
@@ -179,14 +187,14 @@ void close_server(struct tcpserver *server)
 	close(server->sockfd);
 }
 
-int s_res(int fd, char msg[], size_t msg_size)
+ssize_t s_msg(int fd, char *msg, size_t msg_size)
 {
 	// improve this in the future
 	send(fd, msg, msg_size, 0);
 	return 0;
 }
 
-int r_msg(char *buf, size_t size, int fd)
+ssize_t r_msg(char *buf, size_t size, int fd)
 {
 	size_t msg_size = 0;
 	int msg_found = 0;
@@ -207,15 +215,16 @@ int r_msg(char *buf, size_t size, int fd)
 		memcpy(s_buf, buf, msg_size);
 
 		int ok;
-		if ((ok = s_res(fd, s_buf, msg_size)) != 0)
+		if ((ok = s_msg(fd, s_buf, msg_size)) != 0)
 		{
-		    printf("Failed sending msg with len %zu\n", msg_size);
-		    printf("msg: %s\n", s_buf);
-		    return 0;
+			printf("Failed sending msg with len %zu\n", msg_size);
+			printf("msg: %s", s_buf);
+			return 0;
 		}
 
 		printf("Sent msg with len %zu\n", msg_size);
-		printf("msg: %s", s_buf); // don't include \n because the message ends with it
+		printf("msg: %s",
+			   s_buf); // don't include \n because the message ends with it
 		return msg_size;
 	}
 
@@ -228,9 +237,9 @@ int r_msg(char *buf, size_t size, int fd)
 int main(void)
 {
 	int ok;
-	struct tcpserver sv;
+	struct tcpserver sv = {
+		.port = "3333", .sockfd = -1, .accepted_fd = -1, .state = CLOSED};
 
-	sv.port = "3333";
 	printf("Starting server at port 3333\n");
 
 	if ((ok = init_tcpserver(&sv)) != 0)
@@ -240,6 +249,7 @@ int main(void)
 		return -1;
 	}
 
+	// fills the accepted fd on server for now
 	if ((ok = handle_connections(&sv)) != 0)
 	{
 		printf("Failed accepting connections");

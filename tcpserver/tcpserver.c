@@ -10,9 +10,10 @@
 #include <unistd.h>
 
 #define BACKLOG 10
+#define BUFFER_INITIAL_SIZE 1024
 
 typedef int server_state;
-struct tcp_server
+struct tcpserver
 {
 	char *port;
 	int sockfd;
@@ -20,14 +21,7 @@ struct tcp_server
 	server_state state;
 };
 
-// struct message
-// {
-// };
-//
-// void start_listen(struct server *sv, (void)(*on_request)(struct message msg))
-// {}
-
-int create_server(struct tcp_server *sv)
+int init_tcpserver(struct tcpserver *sv)
 {
 	struct addrinfo hints, *servinfo, *p;
 	int sockfd;
@@ -53,6 +47,14 @@ int create_server(struct tcp_server *sv)
 			continue;
 		}
 
+		if ((ok = setsockopt(sockfd, SOL_SOCKET, SO_REUSEADDR, &(int){1},
+							 sizeof(int))) != 0)
+		{
+			perror("setsockopt");
+			close(sockfd);
+			continue;
+		}
+
 		if ((ok = bind(sockfd, p->ai_addr, p->ai_addrlen)) < 0)
 		{
 			perror("bind");
@@ -68,26 +70,31 @@ int create_server(struct tcp_server *sv)
 	if (p == NULL)
 	{
 		fprintf(stderr, "Server failed to bind\n");
-		exit(1);
+		return -1;
 	}
 
 	if ((ok = listen(sockfd, BACKLOG)) == -1)
 	{
 		perror("listen");
 		close(sockfd);
-		exit(1);
+		return -1;
 	}
+	sv->sockfd = sockfd;
 	fprintf(stdout, "Listening on %s...\n", sv->port);
+	return 0;
+}
 
+int handle_connections(struct tcpserver *sv)
+{
 	struct sockaddr_storage their_addr;
-	socklen_t sin_size;
+	socklen_t sin_size = sizeof(their_addr);
+
 	// improve this with fork
-	int new_fd = accept(sockfd, (struct sockaddr *)&their_addr, &sin_size);
+	int new_fd = accept(sv->sockfd, (struct sockaddr *)&their_addr, &sin_size);
 	if (new_fd < 0)
 	{
 		perror("accept");
-		close(sockfd);
-		exit(1);
+		return -1;
 	}
 
 	char s[INET_ADDRSTRLEN];
@@ -96,16 +103,15 @@ int create_server(struct tcp_server *sv)
 			  sizeof(s));
 	fprintf(stdout, "Connected to %s\n", s);
 
-	sv->sockfd = sockfd;
+	// should be an array of fd, for fork
 	sv->accepted_fd = new_fd;
 
 	return 0;
 }
 
-void recv_loop(struct tcp_server *server,
-			   int (*on_message_recv)(char *, size_t))
+void recv_loop(int fd, int (*on_message_recv)(char *, size_t, int))
 {
-	int buffer_size = 1024;
+	int buffer_size = BUFFER_INITIAL_SIZE;
 	char *buffer = calloc(buffer_size, sizeof(char));
 
 	int bytes_rcv = 0;
@@ -128,8 +134,8 @@ void recv_loop(struct tcp_server *server,
 			buffer = p;
 		}
 
-		bytes_rcv = recv(server->accepted_fd, buffer + total_bytes,
-						 buffer_size - total_bytes, 0);
+		bytes_rcv =
+			recv(fd, buffer + total_bytes, buffer_size - total_bytes, 0);
 		if (bytes_rcv == -1)
 		{
 			perror("recv");
@@ -143,8 +149,7 @@ void recv_loop(struct tcp_server *server,
 
 		total_bytes += bytes_rcv;
 
-		// TODO create on_message_recv arg and a http func of this
-		int bytes_processed = on_message_recv(buffer, total_bytes);
+		int bytes_processed = on_message_recv(buffer, total_bytes, fd);
 		if (bytes_processed == -1)
 		{
 			fprintf(stderr, "Failed processing received message");
@@ -168,16 +173,53 @@ void recv_loop(struct tcp_server *server,
 	free(buffer);
 }
 
-void close_server(struct tcp_server *server)
+void close_server(struct tcpserver *server)
 {
 	close(server->accepted_fd);
 	close(server->sockfd);
 }
 
-int r_msg(char *buf, size_t size)
+int s_res(int fd, char msg[], size_t msg_size)
 {
-	printf("%s\n", buf);
-	return size;
+	// improve this in the future
+	send(fd, msg, msg_size, 0);
+	return 0;
+}
+
+int r_msg(char *buf, size_t size, int fd)
+{
+	size_t msg_size = 0;
+	int msg_found = 0;
+	for (size_t i = 0; i < size; i++)
+	{
+		msg_size++;
+
+		if (*(buf + i) == '\n')
+		{
+			msg_found = 1;
+			break;
+		}
+	}
+
+	if (msg_found)
+	{
+		char s_buf[msg_size];
+		memcpy(s_buf, buf, msg_size);
+
+		int ok;
+		if ((ok = s_res(fd, s_buf, msg_size)) != 0)
+		{
+		    printf("Failed sending msg with len %zu\n", msg_size);
+		    printf("msg: %s\n", s_buf);
+		    return 0;
+		}
+
+		printf("Sent msg with len %zu\n", msg_size);
+		printf("msg: %s", s_buf); // don't include \n because the message ends with it
+		return msg_size;
+	}
+
+	return 0;
 }
 
 // create a tcp server capable of knowing how to join message chunks into a
@@ -185,14 +227,29 @@ int r_msg(char *buf, size_t size)
 // complete) will be given from the protocol that is built on the server
 int main(void)
 {
+	int ok;
+	struct tcpserver sv;
+
+	sv.port = "3333";
 	printf("Starting server at port 3333\n");
 
-	struct tcp_server sv;
-	sv.port = "3333";
+	if ((ok = init_tcpserver(&sv)) != 0)
+	{
+		printf("Failed server init");
+		close_server(&sv);
+		return -1;
+	}
+
+	if ((ok = handle_connections(&sv)) != 0)
+	{
+		printf("Failed accepting connections");
+		close_server(&sv);
+		return -1;
+	}
 
 	// in the future, test with stdin and out file descriptors
-	create_server(&sv);
-	recv_loop(&sv, r_msg);
+	recv_loop(sv.accepted_fd, r_msg);
+
 	close_server(&sv);
 	printf("Server shutting down...\n");
 }

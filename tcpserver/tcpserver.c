@@ -10,6 +10,16 @@
 #include <unistd.h>
 //#include "tcpserver.h"
 
+// TODO list:
+// - use the header file
+// - separate the buffering logic from r_msg,
+// for reuse in s_msg 
+// - deal with buffering and partial send in s_msg
+// - fork this thing, treat multiple connections
+// - prepare this to be the base layer of app protocols, build
+// an httpserver on top of this
+
+
 #define BACKLOG 10
 #define BUFFER_INITIAL_SIZE 1024
 
@@ -92,6 +102,12 @@ int init_tcpserver(struct tcpserver *sv)
 	return 0;
 }
 
+// instead of this with the recv_loop, take callbacks
+// here, if there is a recv callback, handle recvs (forked
+// on every accept), if there is a send callback,
+// handle sends (forked on every accept) and if both take both
+// if none, reject, there is no server that don't receive 
+// neither sends
 int handle_connections(struct tcpserver *sv)
 {
 	struct sockaddr_storage their_addr;

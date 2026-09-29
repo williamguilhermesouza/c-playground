@@ -8,20 +8,19 @@
 #include <sys/socket.h>
 #include <sys/types.h>
 #include <unistd.h>
-//#include "tcpserver.h"
+// #include "tcpserver.h"
 
 // TODO list:
 // - use the header file
 // - separate the buffering logic from r_msg,
-// for reuse in s_msg 
+// for reuse in s_msg
 // - deal with buffering and partial send in s_msg
 // - fork this thing, treat multiple connections
 // - prepare this to be the base layer of app protocols, build
 // an httpserver on top of this
 
-
 #define BACKLOG 10
-#define BUFFER_INITIAL_SIZE 1024
+#define BUFFER_INITIAL_SIZE 4
 
 enum ServerState
 {
@@ -106,7 +105,7 @@ int init_tcpserver(struct tcpserver *sv)
 // here, if there is a recv callback, handle recvs (forked
 // on every accept), if there is a send callback,
 // handle sends (forked on every accept) and if both take both
-// if none, reject, there is no server that don't receive 
+// if none, reject, there is no server that don't receive
 // neither sends
 int handle_connections(struct tcpserver *sv)
 {
@@ -133,9 +132,24 @@ int handle_connections(struct tcpserver *sv)
 	return 0;
 }
 
+int grow_buffer(char **buffer, size_t *buffer_size)
+{
+	size_t prev_buffer_size = *buffer_size;
+	*buffer_size *= 2;
+	char *p = realloc(*buffer, *buffer_size);
+	if (p == NULL)
+	{
+		return -1;
+	}
+
+	memset(p + prev_buffer_size, 0, *buffer_size - prev_buffer_size);
+	*buffer = p;
+	return 0;
+}
+
 void recv_loop(int fd, ssize_t (*on_message_recv)(char *, size_t, int))
 {
-	int buffer_size = BUFFER_INITIAL_SIZE;
+	size_t buffer_size = BUFFER_INITIAL_SIZE;
 	char *buffer = calloc(buffer_size, sizeof(char));
 
 	int bytes_rcv = 0;
@@ -143,19 +157,14 @@ void recv_loop(int fd, ssize_t (*on_message_recv)(char *, size_t, int))
 	while (1)
 	{
 		// buffer filled, realoc
-		if (total_bytes == buffer_size)
+		if (total_bytes == (int)buffer_size)
 		{
-			size_t prev_buffer_size = buffer_size;
-			buffer_size *= 2;
-			char *p = realloc(buffer, buffer_size);
-			if (p == NULL)
+			int ok;
+			if ((ok = grow_buffer(&buffer, &buffer_size)) != 0)
 			{
 				perror("realloc");
 				break;
 			}
-
-			memset(p + prev_buffer_size, 0, buffer_size - prev_buffer_size);
-			buffer = p;
 		}
 
 		bytes_rcv =

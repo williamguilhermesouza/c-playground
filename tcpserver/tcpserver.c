@@ -12,15 +12,13 @@
 
 // TODO list:
 // - use the header file
-// - separate the buffering logic from r_msg,
-// for reuse in s_msg
 // - deal with buffering and partial send in s_msg
 // - fork this thing, treat multiple connections
 // - prepare this to be the base layer of app protocols, build
 // an httpserver on top of this
 
 #define BACKLOG 10
-#define BUFFER_INITIAL_SIZE 4
+#define BUFFER_INITIAL_SIZE 1024
 
 enum ServerState
 {
@@ -147,17 +145,32 @@ int grow_buffer(char **buffer, size_t *buffer_size)
 	return 0;
 }
 
+void shift_unconsumed_to_start(char *buffer, size_t buffer_size,
+							   size_t total_bytes, int bytes_processed)
+{
+	// get the not consumed portion of the buffer and
+	// move it to the beginning
+	char *not_consumed_ptr = buffer + bytes_processed;
+	size_t not_consumed_size = total_bytes - bytes_processed;
+	memmove(buffer, not_consumed_ptr, not_consumed_size);
+
+	// zero out any garbage data after moving the buffer
+	size_t empty_buffer_size = buffer_size - not_consumed_size;
+	char *not_consumed_end = buffer + not_consumed_size;
+	memset(not_consumed_end, 0, empty_buffer_size);
+}
+
 void recv_loop(int fd, ssize_t (*on_message_recv)(char *, size_t, int))
 {
 	size_t buffer_size = BUFFER_INITIAL_SIZE;
 	char *buffer = calloc(buffer_size, sizeof(char));
 
-	int bytes_rcv = 0;
-	int total_bytes = 0;
+	ssize_t bytes_rcv = 0;
+	size_t total_bytes = 0;
 	while (1)
 	{
 		// buffer filled, realoc
-		if (total_bytes == (int)buffer_size)
+		if (total_bytes == buffer_size)
 		{
 			int ok;
 			if ((ok = grow_buffer(&buffer, &buffer_size)) != 0)
@@ -183,23 +196,14 @@ void recv_loop(int fd, ssize_t (*on_message_recv)(char *, size_t, int))
 		total_bytes += bytes_rcv;
 
 		int bytes_processed = on_message_recv(buffer, total_bytes, fd);
-		if (bytes_processed == -1 || bytes_processed > total_bytes)
+		if (bytes_processed == -1 || bytes_processed > (int)total_bytes)
 		{
 			fprintf(stderr, "Failed processing received message");
 			break;
 		}
 
-		// get the not consumed portion of the buffer and
-		// move it to the beginning
-		char *not_consumed_ptr = buffer + bytes_processed;
-		size_t not_consumed_size = total_bytes - bytes_processed;
-		memmove(buffer, not_consumed_ptr, not_consumed_size);
-
-		// zero out any garbage data after moving the buffer
-		size_t empty_buffer_size = buffer_size - not_consumed_size;
-		char *not_consumed_end = buffer + not_consumed_size;
-		memset(not_consumed_end, 0, empty_buffer_size);
-
+		shift_unconsumed_to_start(buffer, buffer_size, total_bytes,
+								  bytes_processed);
 		total_bytes -= bytes_processed;
 	}
 

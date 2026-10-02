@@ -1,6 +1,8 @@
 #include "tcpserver.h"
 
 #include <arpa/inet.h>
+#include <asm-generic/errno-base.h>
+#include <errno.h>
 #include <netdb.h>
 #include <netinet/in.h>
 #include <stdio.h>
@@ -10,7 +12,6 @@
 #include <unistd.h>
 
 // TODO list:
-// - deal with buffering and partial send in s_msg
 // - fork this thing, treat multiple connections
 // - prepare this to be the base layer of app protocols, build
 // an httpserver on top of this
@@ -195,11 +196,38 @@ void close_server(struct tcpserver *server)
 	close(server->sockfd);
 }
 
-ssize_t s_msg(int fd, char *msg, size_t msg_size)
+ssize_t s_msg(int fd, const char *msg, size_t msg_size)
 {
-	// improve this in the future
-	send(fd, msg, msg_size, 0);
-	return 0;
+	size_t total_bytes_sent = 0;
+	ssize_t bytes_sent = 0;
+
+	if (msg_size == 0)
+	{
+		return 0;
+	}
+
+	while (total_bytes_sent < msg_size)
+	{
+		bytes_sent =
+			send(fd, msg + total_bytes_sent, msg_size - total_bytes_sent, 0);
+
+		if (bytes_sent == 0)
+		{
+			return -1;
+		}
+		if (bytes_sent == -1)
+		{
+			// getting if errored because of syscall interrupt
+			if (errno == EINTR)
+				continue;
+
+			return -1;
+		}
+
+		total_bytes_sent += bytes_sent;
+	}
+
+	return (ssize_t)total_bytes_sent;
 }
 
 ssize_t r_msg(char *buf, size_t size, int fd)
@@ -223,8 +251,9 @@ ssize_t r_msg(char *buf, size_t size, int fd)
 		memcpy(s_buf, buf, msg_size);
 
 		int ok;
-		if ((ok = s_msg(fd, s_buf, msg_size)) != 0)
+		if ((ok = s_msg(fd, s_buf, msg_size)) == -1)
 		{
+			perror("s_msg");
 			printf("Failed sending msg with len %zu\n", msg_size);
 			printf("msg: %s", s_buf);
 			return 0;

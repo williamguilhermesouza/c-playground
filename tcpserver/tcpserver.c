@@ -1,40 +1,19 @@
+#include "tcpserver.h"
+
 #include <arpa/inet.h>
 #include <netdb.h>
 #include <netinet/in.h>
-#include <stddef.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <sys/socket.h>
-#include <sys/types.h>
 #include <unistd.h>
-// #include "tcpserver.h"
 
 // TODO list:
-// - use the header file
 // - deal with buffering and partial send in s_msg
 // - fork this thing, treat multiple connections
 // - prepare this to be the base layer of app protocols, build
 // an httpserver on top of this
-
-#define BACKLOG 10
-#define BUFFER_INITIAL_SIZE 1024
-
-enum ServerState
-{
-	CREATED = 0,
-	INITIALIZED = 1,
-	LISTENING = 2,
-	CLOSED = 3
-};
-typedef int server_state;
-struct tcpserver
-{
-	char *port;
-	int sockfd;
-	int accepted_fd;
-	server_state state;
-};
 
 int init_tcpserver(struct tcpserver *sv)
 {

@@ -1,5 +1,8 @@
 #ifndef TCPSERVER_H
 
+#include <stddef.h>
+#include <sys/types.h>
+
 #define TCPSERVER_H
 #define BACKLOG 10
 #define BUFFER_INITIAL_SIZE 1024

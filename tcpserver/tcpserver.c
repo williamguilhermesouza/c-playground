@@ -9,10 +9,10 @@
 #include <stdlib.h>
 #include <string.h>
 #include <sys/socket.h>
+#include <sys/types.h>
 #include <unistd.h>
 
 // TODO list:
-// - fork this thing, treat multiple connections
 // - prepare this to be the base layer of app protocols, build
 // an httpserver on top of this
 
@@ -85,28 +85,47 @@ int init_tcpserver(struct tcpserver *sv)
 // handle sends (forked on every accept) and if both take both
 // if none, reject, there is no server that don't receive
 // neither sends
-int handle_connections(struct tcpserver *sv)
+int handle_connections(struct tcpserver *sv,
+					   ssize_t (*on_message_recv)(char *, size_t, int))
 {
 	struct sockaddr_storage their_addr;
 	socklen_t sin_size = sizeof(their_addr);
 
-	// improve this with fork
 	int new_fd = accept(sv->sockfd, (struct sockaddr *)&their_addr, &sin_size);
-	if (new_fd < 0)
+	if (new_fd == -1)
 	{
+		if (errno == EINTR)
+			return 0;
+
 		perror("accept");
 		return -1;
 	}
 
-	char s[INET_ADDRSTRLEN];
-	struct sockaddr_in *si = (struct sockaddr_in *)&their_addr;
-	inet_ntop(their_addr.ss_family, (struct sockaddr *)&si->sin_addr, s,
-			  sizeof(s));
-	fprintf(stdout, "Connected to %s\n", s);
+	pid_t pid = fork();
+	if (pid == -1)
+	{
+		perror("fork");
+		close(new_fd);
+		return -1;
+	}
+	if (!pid) // it is the child process
+	{
+		close(sv->sockfd); // not needed on child
 
-	// should be an array of fd, for fork
-	sv->accepted_fd = new_fd;
+		char s[INET_ADDRSTRLEN];
+		struct sockaddr_in *si = (struct sockaddr_in *)&their_addr;
+		inet_ntop(their_addr.ss_family, (struct sockaddr *)&si->sin_addr, s,
+				  sizeof(s));
+		fprintf(stdout, "Connected to %s\n", s);
+		sv->accepted_fd = new_fd;
 
+		recv_loop(sv->accepted_fd, on_message_recv);
+		close(new_fd);
+
+		_exit(0);
+	}
+
+	close(new_fd);
 	return 0;
 }
 
@@ -281,22 +300,21 @@ int main(void)
 
 	if ((ok = init_tcpserver(&sv)) != 0)
 	{
-		printf("Failed server init");
+		fprintf(stdout, "Failed server init");
 		close_server(&sv);
 		return -1;
 	}
 
-	// fills the accepted fd on server for now
-	if ((ok = handle_connections(&sv)) != 0)
+	while (1)
 	{
-		printf("Failed accepting connections");
-		close_server(&sv);
-		return -1;
+		// fills the accepted fd on server for now
+		if ((ok = handle_connections(&sv, r_msg)) != 0)
+		{
+			fprintf(stdout, "Failed accepting connections\n");
+			break;
+		}
 	}
 
-	// in the future, test with stdin and out file descriptors
-	recv_loop(sv.accepted_fd, r_msg);
-
-	close_server(&sv);
+	close(sv.sockfd);
 	printf("Server shutting down...\n");
 }

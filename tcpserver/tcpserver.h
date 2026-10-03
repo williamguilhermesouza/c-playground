@@ -24,7 +24,7 @@ struct tcpserver
 };
 
 int init_tcpserver(struct tcpserver *sv);
-int handle_connections(struct tcpserver *sv);
+int handle_connections(struct tcpserver *sv, ssize_t (*on_message_recv)(char *, size_t, int));
 void recv_loop(int fd, ssize_t (*on_message_recv)(char *, size_t, int));
 void close_server(struct tcpserver *server);
 ssize_t s_msg(int fd, const char *msg, size_t msg_size);
